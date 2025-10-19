@@ -3,118 +3,141 @@ name: Build
 on:
   push:
     branches:
-    - master
+      - master
   pull_request:
     branches:
-    - master
+      - master
 
 env:
-  WORKING_DIRECTORY: 'dlib'
-  BUILD_COMMIT: 'v19.24.6'
-  DLIB_BIN_VERSION: '19.24.6'
-  PYTHON_REQUIRES: '>=3.8'
+  # Build configuration
+  WORKING_DIRECTORY: "dlib"
+  BUILD_COMMIT: "v20.0"
+  DLIB_BIN_VERSION: "20.0.0"
+  CIBUILDWHEEL_VERSION: "3.2.1"
+  
+  # Python requirements
+  CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
 
 jobs:
-  build_wheels_matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      include: ${{ steps.set-matrix.outputs.include }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
-          submodules: true
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-
-      - run: pip install cibuildwheel==2.22.0  # sync version with pypa/cibuildwheel below
-
-      - id: set-matrix
-        env:
-          CIBW_PROJECT_REQUIRES_PYTHON: '>=3.8'  # it is missing in setup.py and needed to determine which wheels to build
-          CIBW_ENABLE: "cpython-freethreading"
-          CIBW_SKIP: "pp* cp38-macosx_arm64 *t-win*"
-          CIBW_BUILD: "cp*"
-        run: |
-          MATRIX_INCLUDE=$(
-            {
-              cibuildwheel --print-build-identifiers --platform linux --arch x86_64,aarch64 | jq -nRc '{"only": inputs, "os": "ubuntu-latest", "deployment_target": ""}' \
-              && cibuildwheel --print-build-identifiers --platform macos --arch x86_64 | jq -nRc '{"only": inputs, "os": "macos-13", "deployment_target": "13"}' \
-              && cibuildwheel --print-build-identifiers --platform macos --arch arm64 | jq -nRc '{"only": inputs, "os": "macos-14", "deployment_target": "14"}' \
-              && cibuildwheel --print-build-identifiers --platform windows --arch AMD64 | jq -nRc '{"only": inputs, "os": "windows-latest", "deployment_target": ""}'
-            } | jq -sc
-          )
-          echo "include=$MATRIX_INCLUDE" >> $GITHUB_OUTPUT
-        working-directory: ${{ env.WORKING_DIRECTORY }}
-
+  # Build wheels for all platforms
   build_wheels:
-    needs: build_wheels_matrix
-    runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.only }}
+    runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.build_wheels_matrix.outputs.include) }}
+        include:
+          # Linux x86_64 - manylinux
+          - { only: "cp311-manylinux_x86_64", os: "ubuntu-latest" }
+          - { only: "cp312-manylinux_x86_64", os: "ubuntu-latest" }
+          - { only: "cp313-manylinux_x86_64", os: "ubuntu-latest" }
+          - { only: "cp314-manylinux_x86_64", os: "ubuntu-latest" }
+          
+          # Linux x86_64 - musllinux
+          - { only: "cp311-musllinux_x86_64", os: "ubuntu-latest" }
+          - { only: "cp312-musllinux_x86_64", os: "ubuntu-latest" }
+          - { only: "cp313-musllinux_x86_64", os: "ubuntu-latest" }
+          - { only: "cp314-musllinux_x86_64", os: "ubuntu-latest" }
+          
+          # Linux aarch64 - manylinux (native ARM runners)
+          - { only: "cp311-manylinux_aarch64", os: "ubuntu-24.04-arm" }
+          - { only: "cp312-manylinux_aarch64", os: "ubuntu-24.04-arm" }
+          - { only: "cp313-manylinux_aarch64", os: "ubuntu-24.04-arm" }
+          - { only: "cp314-manylinux_aarch64", os: "ubuntu-24.04-arm" }
+          
+          # Linux aarch64 - musllinux (native ARM runners)
+          - { only: "cp311-musllinux_aarch64", os: "ubuntu-24.04-arm" }
+          - { only: "cp312-musllinux_aarch64", os: "ubuntu-24.04-arm" }
+          - { only: "cp313-musllinux_aarch64", os: "ubuntu-24.04-arm" }
+          - { only: "cp314-musllinux_aarch64", os: "ubuntu-24.04-arm" }
+          
+          # macOS arm64
+          - { only: "cp311-macosx_arm64", os: "macos-14" }
+          - { only: "cp312-macosx_arm64", os: "macos-14" }
+          - { only: "cp313-macosx_arm64", os: "macos-14" }
+          - { only: "cp314-macosx_arm64", os: "macos-14" }
+          
+          # Windows AMD64
+          - { only: "cp311-win_amd64", os: "windows-latest" }
+          - { only: "cp312-win_amd64", os: "windows-latest" }
+          - { only: "cp313-win_amd64", os: "windows-latest" }
+          - { only: "cp314-win_amd64", os: "windows-latest" }
 
     defaults:
       run:
         shell: bash
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha || github.ref }}
-        submodules: true
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          submodules: true
 
-    - name: Checkout build commit
-      run: git fetch --all && git checkout $BUILD_COMMIT
-      working-directory: ${{ env.WORKING_DIRECTORY }}
+      - name: Checkout dlib at specific version
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          git fetch --all
+          git checkout $BUILD_COMMIT
 
-    - name: Fix setup.py
-      run: |
-        sed -i'' -e "s/name='dlib'/name='dlib-bin'/" setup.py
-        sed -i'' -e "s/version=read_version_from_cmakelists('dlib\/CMakeLists.txt')/version='$DLIB_BIN_VERSION'/" setup.py
-        sed -i'' -e "s/url='https:\/\/github\.com\/davisking\/dlib'/url='https:\/\/github\.com\/alesanfra\/dlib-wheels'/" setup.py
-        sed -i'' -e "s/_cmake_extra_options = \[\]/_cmake_extra_options = \['-DDLIB_NO_GUI_SUPPORT=ON'\]/" setup.py
-        sed -i'' -e "s/requires = \[\"setuptools\", \"wheel\"\]/requires = \[\"setuptools\", \"wheel\", \"cmake>=3.31.0\"\]/" pyproject.toml
-      working-directory: ${{ env.WORKING_DIRECTORY }}
+      - name: Patch dlib configuration
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          # Update package name to dlib-bin
+          sed -i'' -e "s/name='dlib'/name='dlib-bin'/" setup.py
           
-    - name: Set up QEMU
-      if: runner.os == 'Linux'
-      uses: docker/setup-qemu-action@v3
+          # Set explicit version
+          sed -i'' -e "s/version=read_version_from_cmakelists('dlib\/CMakeLists.txt')/version='$DLIB_BIN_VERSION'/" setup.py
+          
+          # Update repository URL
+          sed -i'' -e "s/url='https:\/\/github\.com\/davisking\/dlib'/url='https:\/\/github\.com\/alesanfra\/dlib-wheels'/" setup.py
+          
+          # Disable GUI support
+          sed -i'' -e "s/_cmake_extra_options = \[\]/_cmake_extra_options = \['-DDLIB_NO_GUI_SUPPORT=ON'\]/" setup.py
+          
+          # Add CMake build requirement
+          sed -i'' -e "s/requires = \[\"setuptools\", \"wheel\"\]/requires = \[\"setuptools\", \"wheel\", \"cmake>=3.31.0\"\]/" pyproject.toml
+          
+      # Note: version must match CIBUILDWHEEL_VERSION env var
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v3.2.1
+        with:
+          only: ${{ matrix.only }}
+          package-dir: ${{ env.WORKING_DIRECTORY }}
+        env:
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_BEFORE_BUILD: pip install cmake
+          CIBW_TEST_COMMAND: python -c "import dlib"
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
 
-    - uses: pypa/cibuildwheel@v2.22.0  # sync version with pip install cibuildwheel above
-      with:
-        only: ${{ matrix.only }}
-        package-dir: ${{ env.WORKING_DIRECTORY }}
-      env:
-        CIBW_BUILD_VERBOSITY: 1
-        CIBW_BEFORE_BUILD: pip install cmake
-        CIBW_TEST_COMMAND: python -c "import dlib"
-        MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: dist-${{ matrix.only }}
-        path: wheelhouse/*.whl
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.only }}
+          path: wheelhouse/*.whl
  
+  # Upload to PyPI on master branch
   upload_pypi:
+    name: Publish to PyPI
     needs: [build_wheels]
     runs-on: ubuntu-latest
-    # upload to PyPI on master
+    
+    # Only upload on master branch pushes
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    
     permissions:
-      id-token: write  # pypa/gh-action-pypi-publish
+      id-token: write  # Required for trusted publishing
+    
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
         with:
           path: dist/
           pattern: dist-*
           merge-multiple: true
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip_existing: true
